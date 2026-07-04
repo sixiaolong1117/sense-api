@@ -26,6 +26,9 @@ models/xet/
 .DS_Store
 Thumbs.db
 
+# Docker Compose (use docker-compose.yml.example as template)
+docker-compose.yml
+
 # Temporary files
 *.tmp
 *.temp
