@@ -2,4 +2,7 @@ fastapi
 uvicorn
 python-multipart
 faster-whisper
-torch
+transformers
+accelerate
+pillow
+qwen-vl-utils

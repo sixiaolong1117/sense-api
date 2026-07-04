@@ -1,12 +1,15 @@
-# Whisper ASR HTTP API
+# Whisper ASR + Qwen2-VL HTTP API
 
-基于 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 的语音识别 HTTP API 服务，使用 CUDA GPU 加速，通过 Docker 一键部署。
+基于 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 和 [Qwen2-VL](https://github.com/QwenLM/Qwen2-VL) 的多模态 AI API 服务，使用 CUDA GPU 加速，通过 Docker 一键部署。
+
+- **语音识别** — 上传音频文件，返回转录文本
+- **视觉识别** — 上传图片文件，返回图文理解结果
 
 ## 项目结构
 
 ```
 whisper/
-├── app.py              # FastAPI 应用，提供 /transcribe 接口
+├── app.py              # FastAPI 应用，提供 /transcribe 和 /vision 接口
 ├── Dockerfile          # 基于 CUDA 12.8 的 Docker 镜像构建
 ├── docker-compose.yml  # 容器编排，含 GPU 资源配置
 ├── requirements.txt    # Python 依赖
@@ -29,7 +32,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-首次启动会自动下载 `large-v3` 模型（约 3GB），模型文件持久化在 `./models` 目录，后续启动无需重复下载。
+首次启动会自动下载 Whisper 模型（约 3GB）和 Qwen2-VL-2B 模型（约 4GB），模型文件持久化在 `./models` 目录，后续启动无需重复下载。
 
 ### 停止并清理
 
@@ -49,9 +52,9 @@ docker compose down --rmi all
 docker compose up -d --build
 ```
 
-## API 用法
+## 语音识别 API
 
-### 接口地址
+### 接口
 
 ```
 POST /transcribe
@@ -91,11 +94,71 @@ print(r.json())
 | `language` | string | 检测到的音频语言（ISO 639-1 代码） |
 | `text` | string | 识别出的文本 |
 
-## 支持的音频格式
+### 支持的音频格式
 
 只要 FFmpeg 能解码的格式都支持，包括但不限于：
 
 - WAV / MP3 / FLAC / M4A / AAC / OGG / WMA
+
+---
+
+## 视觉识别 API
+
+### 接口
+
+```
+POST /vision
+```
+
+### 请求格式
+
+`multipart/form-data`，字段名 `file` 传入图片，可选字段 `prompt` 传入文本提示词。
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `file` | file | 是 | 图片文件（JPG / PNG / WEBP / BMP 等） |
+| `prompt` | string | 否 | 文本提示词，默认 `"请描述这张图片的内容"` |
+
+### curl 调用
+
+```bash
+curl -F "file=@photo.jpg" http://localhost:56178/vision
+
+# 自定义提示词
+curl -F "file=@chart.png" -F "prompt=请分析这张图表并总结关键信息" http://localhost:56178/vision
+```
+
+### Python 调用
+
+```python
+import requests
+
+files = {"file": open("photo.jpg", "rb")}
+r = requests.post("http://192.168.1.100:56178/vision", files=files)
+print(r.json())
+
+# 自定义提示词
+files = {"file": open("chart.png", "rb")}
+data = {"prompt": "请分析这张图表"}
+r = requests.post("http://192.168.1.100:56178/vision", files=files, data=data)
+print(r.json())
+```
+
+### 返回格式
+
+```json
+{
+  "text": "图片中是一个现代化的办公空间，有白色的桌子和灰色椅子..."
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `text` | string | 视觉识别结果文本 |
+
+### 支持的图片格式
+
+- JPG / JPEG / PNG / WEBP / BMP / GIF
 
 ## Docker Compose 配置说明
 
@@ -121,6 +184,7 @@ deploy:
 services:
   whisper:
     build: .
+    shm_size: '2gb'
     ports:
       - "56178:56178"
     volumes:
@@ -129,19 +193,38 @@ services:
     gpus: all
 ```
 
+> `shm_size: '2gb'` 是 Qwen2-VL 的必要配置，用于 DataLoader 的共享内存，请勿移除。
+
+## 资源管理
+
+### 模型闲置自动释放显存
+
+所有模型均使用 `ModelManager` 统一管理，在闲置 **5 分钟** 后自动卸载并清理 GPU 显存，下次请求时自动重新加载。可通过 `app.py` 中的 `idle_timeout` 参数调整超时阈值。
+
 ## 自定义模型
 
-编辑 `app.py`，修改模型名称或参数：
+### Whisper 模型
+
+编辑 `app.py` 中的 `_load_whisper()` 函数：
 
 ```python
-model = WhisperModel(
-    "large-v3",          # 模型名称，可选: tiny/base/small/medium/large-v3
-    device="cuda",       # 推理设备: cuda / cpu
-    compute_type="float16"  # 精度: float16 / int8_float16 / float32
-)
+def _load_whisper():
+    return WhisperModel(
+        "large-v3-turbo",           # 模型名称
+        device="cuda",              # 推理设备: cuda / cpu
+        compute_type="float16"      # 精度: float16 / int8_float16 / float32
+    )
 ```
 
-> **注意**：切换到 CPU 推理请删除 `compute_type` 参数或设为 `int8`，并移除 Docker Compose 中的 GPU 配置。
+### Qwen2-VL 模型
+
+编辑 `app.py` 中的 `QWEN_MODEL_NAME` 变量：
+
+```python
+QWEN_MODEL_NAME = "Qwen/Qwen2-VL-2B-Instruct"  # 可选 7B/72B
+```
+
+> **注意**：切换到 CPU 推理请移除 GPU 相关配置，Qwen2-VL 在 CPU 上速度较慢，建议使用 GPU。
 
 ## 常见问题
 
@@ -166,3 +249,10 @@ A: 使用 `CUDA_VISIBLE_DEVICES` 环境变量：
 environment:
   - CUDA_VISIBLE_DEVICES=0   # 仅使用第 1 张 GPU
 ```
+
+**Q: 显存不足怎么办？**
+
+A: 两个模型不会同时占用显存 — 闲置 5 分钟会自动卸载。如果一张 GPU 显存仍然紧张（如 6GB），可考虑：
+1. 缩短 `idle_timeout` 让模型更快释放
+2. 使用更小的模型（如 `Qwen/Qwen2-VL-2B-Instruct` 已是最小）
+3. 切换到 `compute_type="int8_float16"` 降低 Whisper 显存占用

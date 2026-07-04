@@ -1,7 +1,13 @@
 services:
   whisper:
-    build: .
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     container_name: whisper
+    shm_size: '2gb'
     ports:
       - "56178:56178"
     volumes:
@@ -14,7 +20,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G 
+          memory: 8G 
         reservations:
           devices:
             - driver: nvidia
