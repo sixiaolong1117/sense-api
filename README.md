@@ -1,4 +1,4 @@
-# Whisper ASR + Qwen2-VL HTTP API
+# Sense API — 多模态感知服务
 
 基于 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 和 [Qwen2-VL](https://github.com/QwenLM/Qwen2-VL) 的多模态 AI API 服务，使用 CUDA GPU 加速，通过 Docker 一键部署。
 
@@ -8,9 +8,9 @@
 ## 项目结构
 
 ```
-whisper/
+sense-api/
 ├── app.py              # FastAPI 应用，提供 /transcribe 和 /vision 接口
-├── Dockerfile          # 基于 CUDA 12.8 的 Docker 镜像构建
+├── Dockerfile          # 基于 PyTorch 的 Docker 镜像构建
 ├── docker-compose.yml  # 容器编排，含 GPU 资源配置
 ├── requirements.txt    # Python 依赖
 └── README.md           # 本文件
@@ -182,7 +182,7 @@ deploy:
 
 ```yaml
 services:
-  whisper:
+  sense-api:
     build: .
     shm_size: '2gb'
     ports:

@@ -1,12 +1,12 @@
 services:
-  whisper:
+  sense-api:
     build:
       context: .
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-    container_name: whisper
+    container_name: sense-api
     shm_size: '2gb'
     ports:
       - "56178:56178"
