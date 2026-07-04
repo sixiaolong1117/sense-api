@@ -1,6 +1,6 @@
 services:
   sense-api:
-    image: ghcr.io/sixiaolong1117/sense-api:latest
+    image: ghcr.io/sixiaolong1117/sense-api:dev
     container_name: sense-api
     shm_size: '2gb'
     ports:
