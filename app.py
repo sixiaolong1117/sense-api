@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI, UploadFile
 from faster_whisper import WhisperModel
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
@@ -7,6 +8,9 @@ import tempfile
 import time
 import threading
 import torch
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("sense-api")
 
 app = FastAPI()
 
@@ -38,12 +42,15 @@ class ModelManager:
         """获取模型实例，若未加载则按需加载（调用方需先获取 self.lock）"""
         self._last_access = time.time()
         if self._model is None:
+            log.info("%s: 开始加载模型（若未缓存将下载，请耐心等待）...", self.name)
             self._model = self._load_fn()
+            log.info("%s: 模型加载完成", self.name)
         return self._model
 
     def unload(self):
         """卸载模型并释放 GPU 显存（调用方需先获取 self.lock）"""
         if self._model is not None:
+            log.info("%s: 闲置超时，卸载模型释放显存", self.name)
             self._unload_fn(self._model)
             self._model = None
             torch.cuda.empty_cache()
