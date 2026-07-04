@@ -64,7 +64,7 @@ POST /transcribe
 ### curl 调用
 
 ```bash
-curl -F "file=@test.wav" http://localhost:8000/transcribe
+curl -F "file=@test.wav" http://localhost:56178/transcribe
 ```
 
 ### Python 调用
@@ -73,7 +73,7 @@ curl -F "file=@test.wav" http://localhost:8000/transcribe
 import requests
 
 files = {"file": open("audio.wav", "rb")}
-r = requests.post("http://192.168.1.100:8000/transcribe", files=files)
+r = requests.post("http://192.168.1.100:56178/transcribe", files=files)
 print(r.json())
 ```
 
@@ -122,7 +122,7 @@ services:
   whisper:
     build: .
     ports:
-      - "8000:8000"
+      - "56178:56178"
     volumes:
       - ./models:/root/.cache/huggingface
     restart: unless-stopped
