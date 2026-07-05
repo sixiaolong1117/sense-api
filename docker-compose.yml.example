@@ -1,5 +1,11 @@
 services:
   sense-api:
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
     image: ghcr.io/sixiaolong1117/sense-api:latest
     container_name: sense-api
     shm_size: '2gb'

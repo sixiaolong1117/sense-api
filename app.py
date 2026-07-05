@@ -1,5 +1,8 @@
 import logging
-from fastapi import FastAPI, UploadFile
+import os
+import platform
+import sys
+from fastapi import FastAPI, UploadFile, HTTPException
 from faster_whisper import WhisperModel
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 from PIL import Image
@@ -8,15 +11,28 @@ import tempfile
 import time
 import threading
 import torch
+import gc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("sense-api")
 
 app = FastAPI()
 
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50MB
+
 # =====================================================================
-#  通用模型管理器 - 支持闲置超时自动卸载显存
+#  通用模型管理器 - 支持闲置超时自动卸载显存及 CPU 内存
 # =====================================================================
+def _trim_memory():
+    """跨平台内存归还"""
+    if platform.system() == "Linux":
+        try:
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):
+            pass
+
+
 class ModelManager:
     """通用模型管理器
 
@@ -48,12 +64,14 @@ class ModelManager:
         return self._model
 
     def unload(self):
-        """卸载模型并释放 GPU 显存（调用方需先获取 self.lock）"""
+        """卸载模型并释放 GPU 显存及 CPU 内存（调用方需先获取 self.lock）"""
         if self._model is not None:
             log.info("%s: 闲置超时，卸载模型释放显存", self.name)
             self._unload_fn(self._model)
             self._model = None
             torch.cuda.empty_cache()
+            gc.collect()
+            _trim_memory()
 
     def _monitor_loop(self):
         while True:
@@ -72,7 +90,7 @@ def _load_whisper():
 
 
 def _unload_whisper(model):
-    del model
+    pass  # 由 ModelManager 统一清理引用
 
 
 whisper_manager = ModelManager(
@@ -98,8 +116,7 @@ def _load_qwen():
 
 
 def _unload_qwen(model_dict):
-    del model_dict["model"]
-    del model_dict["processor"]
+    pass  # 由 ModelManager 统一清理引用
 
 
 qwen_manager = ModelManager(
@@ -111,58 +128,84 @@ qwen_manager = ModelManager(
 # =====================================================================
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @app.post("/transcribe")
 async def transcribe(file: UploadFile):
-    with tempfile.NamedTemporaryFile(delete=False) as f:
-        f.write(await file.read())
-        path = f.name
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="文件过大，最大支持 50MB")
 
-    with whisper_manager.lock:
-        model = whisper_manager.get_model()
-        segments, info = model.transcribe(path)
-        text = ""
-        for seg in segments:
-            text += seg.text
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+            f.write(contents)
+            path = f.name
 
-    return {
-        "language": info.language,
-        "text": text,
-    }
+        with whisper_manager.lock:
+            model = whisper_manager.get_model()
+            segments, info = model.transcribe(path)
+            text = "".join(seg.text for seg in segments)
+
+        return {
+            "language": info.language,
+            "text": text,
+        }
+    except Exception as e:
+        log.error("转录失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"转录失败: {str(e)}")
+    finally:
+        if path and os.path.exists(path):
+            os.unlink(path)
 
 
 @app.post("/vision")
 async def vision(file: UploadFile, prompt: str = "请描述这张图片的内容"):
-    image_data = await file.read()
-    image = Image.open(io.BytesIO(image_data)).convert("RGB")
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="文件过大，最大支持 50MB")
 
-    with qwen_manager.lock:
-        model_dict = qwen_manager.get_model()
-        model = model_dict["model"]
-        processor = model_dict["processor"]
+    try:
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
+    except Exception as e:
+        log.error("图片解析失败: %s", e)
+        raise HTTPException(status_code=400, detail="无效的图片格式")
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": image},
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ]
-        text_input = processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        inputs = processor(
-            text=[text_input], images=[image], padding=True, return_tensors="pt"
-        ).to(model.device)
+    try:
+        with qwen_manager.lock:
+            model_dict = qwen_manager.get_model()
+            model = model_dict["model"]
+            processor = model_dict["processor"]
 
-        output_ids = model.generate(**inputs, max_new_tokens=256)
-        generated_ids = [
-            output_ids[i][len(inputs.input_ids[i]):] for i in range(len(output_ids))
-        ]
-        result = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+            text_input = processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            inputs = processor(
+                text=[text_input], images=[image], padding=True, return_tensors="pt"
+            ).to(model.device)
 
-    return {"text": result}
+            output_ids = model.generate(**inputs, max_new_tokens=256)
+            generated_ids = [
+                output_ids[i][len(inputs.input_ids[i]):] for i in range(len(output_ids))
+            ]
+            result = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+
+        return {"text": result}
+    except Exception as e:
+        log.error("视觉识别失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"视觉识别失败: {str(e)}")
 
 
 if __name__ == "__main__":

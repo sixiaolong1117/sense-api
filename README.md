@@ -201,6 +201,17 @@ services:
 
 所有模型均使用 `ModelManager` 统一管理，在闲置 **5 分钟** 后自动卸载并清理 GPU 显存，下次请求时自动重新加载。可通过 `app.py` 中的 `idle_timeout` 参数调整超时阈值。
 
+### 内存释放策略
+
+卸载模型时按以下顺序执行完整的资源回收：
+
+1. **删除模型对象** — `del model`，解除 Python 引用
+2. **清理 GPU 显存** — `torch.cuda.empty_cache()`，释放 CUDA 缓存
+3. **触发垃圾回收** — `gc.collect()`，回收循环引用等不可达对象
+4. **归还 CPU 内存** — `malloc_trim(0)`，将空闲堆内存归还给操作系统
+
+> `malloc_trim(0)` 可有效降低 Python 进程的 RSS 常驻内存，解决 CPython 内存池不归还 OS 的问题。
+
 ## 自定义模型
 
 ### Whisper 模型
